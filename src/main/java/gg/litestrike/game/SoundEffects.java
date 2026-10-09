@@ -1,0 +1,212 @@
+package gg.litestrike.game;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
+
+import net.kyori.adventure.audience.Audience;
+import net.kyori.adventure.key.Key;
+import net.kyori.adventure.sound.Sound;
+import static net.kyori.adventure.sound.Sound.Source.AMBIENT;
+
+public class SoundEffects {
+	public static void game_start() {
+		Audience.audience(Bukkit.getOnlinePlayers())
+				.playSound(Sound.sound(Key.key("crystalized:effect.countdown_end"), AMBIENT, 1f, 1f));
+	}
+
+	public static void round_start() {
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				GameController gc = Litestrike.getInstance().game_controller;
+				if (gc.round_state != GameController.RoundState.PreRound) {
+					cancel();
+				}
+				if (gc.phase_timer == Litestrike.getInstance().gameConfig.preRoundTime - 80) {
+					Bukkit.getServer().playSound(Sound.sound(Key.key("crystalized:effect.ls_round_start"), AMBIENT, 1f, 1f));
+					cancel();
+				}
+			}
+		}.runTaskTimer(Litestrike.getInstance(), 150, 1);
+	}
+
+	public static void round_lost(Audience a) {
+		a.playSound(Sound.sound(Key.key("crystalized:effect.ls_round_lost"), AMBIENT, 1f, 1.0f));
+	}
+
+	public static void round_won(Audience a) {
+		a.playSound(Sound.sound(Key.key("crystalized:effect.ls_round_won"), AMBIENT, 1f, 1.0f));
+	}
+
+	public static void bomb_plant_finish(Location loc) {
+		Audience.audience(Bukkit.getOnlinePlayers())
+				.playSound(Sound.sound(Key.key("crystalized:effect.star_plant"), AMBIENT, 1f, 1.0f));
+	}
+
+	public static void bomb_particles(Location loc) {
+	}
+
+	public static void ally_death(Audience a) {
+		Sound sound1 = Sound.sound(Key.key("block.note_block.didgeridoo"), AMBIENT, 2f, 0.5f);
+		Sound sound2 = Sound.sound(Key.key("block.note_block.snare"), AMBIENT, 2f, 0.5f);
+		a.playSound(sound1);
+		a.playSound(sound2);
+
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				a.playSound(sound1);
+				a.playSound(sound2);
+			}
+		}.runTaskLater(Litestrike.getInstance(), 3);
+	}
+
+	public static void enemy_death(Audience a) {
+		a.playSound(Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 2f, 1f));
+		a.playSound(Sound.sound(Key.key("block.note_block.basedrum"), AMBIENT, 2f, 1f));
+
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				a.playSound(Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 2f, 1.498307f));
+				a.playSound(Sound.sound(Key.key("block.note_block.basedrum"), AMBIENT, 2f, 1.498307f));
+			}
+		}.runTaskLater(Litestrike.getInstance(), 2);
+	}
+
+	private static final float[] KILL_PITCH = { 1.0f, 1.1225f, 1.2599f, 1.4983f, 1.6818f };
+
+	static float killPitch(int streak) {
+		if (streak < 1) {
+			return KILL_PITCH[0];
+		}
+		if (streak > KILL_PITCH.length) {
+			return KILL_PITCH[KILL_PITCH.length - 1];
+		}
+		return KILL_PITCH[streak - 1];
+	}
+
+	public static void killStreakSound(Audience a, int streak) {
+		float base = killPitch(streak);
+		a.playSound(Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 2f, base));
+		a.playSound(Sound.sound(Key.key("block.note_block.basedrum"), AMBIENT, 2f, base));
+		if (streak >= 3) {
+			a.playSound(Sound.sound(Key.key("block.note_block.hat"), AMBIENT, 1f, base));
+		}
+
+		if (streak >= 5) {
+			// ace: ascending pling arpeggio instead of the plain second hit
+			float[] arp = { 2.0f, 2.52f, 3.0f };
+			for (int i = 0; i < arp.length; i++) {
+				float pitch = base * arp[i];
+				new BukkitRunnable() {
+					@Override
+					public void run() {
+						a.playSound(Sound.sound(Key.key("block.note_block.pling"), AMBIENT, 1f, pitch));
+					}
+				}.runTaskLater(Litestrike.getInstance(), 2 + i * 2);
+			}
+			return;
+		}
+
+		final float fifth = base * 1.498307f;
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				a.playSound(Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 2f, fifth));
+				a.playSound(Sound.sound(Key.key("block.note_block.basedrum"), AMBIENT, 2f, fifth));
+				if (streak >= 4) {
+					a.playSound(Sound.sound(Key.key("block.note_block.pling"), AMBIENT, 1f, base * 2.0f));
+				}
+			}
+		}.runTaskLater(Litestrike.getInstance(), 2);
+	}
+
+	public static void countdown_beep() {
+		Bukkit.getServer()
+				.playSound(Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 1f, 1.681793f));
+		Bukkit.getServer()
+				.playSound(Sound.sound(Key.key("block.note_block.bass"), AMBIENT, 1f, 0.594604f));
+	}
+
+	public static Sound start_game_sound() {
+		return Sound.sound(Key.key("crystalized:effect.countdown_end"), AMBIENT, 50, 1);
+	}
+
+	public static void start_breaking(int x, int y, int z) {
+		Sound sound = Sound.sound(Key.key("block.note_block.xylophone"), AMBIENT, 1.9f, 1f);
+		Bukkit.getServer().playSound(sound, x, y, z);
+
+		new BukkitRunnable() {
+			public void run() {
+				Bukkit.getServer().playSound(sound, x, y, z);
+			};
+		}.runTaskLater(Litestrike.getInstance(), 2);
+		new BukkitRunnable() {
+			public void run() {
+				Bukkit.getServer().playSound(sound, x, y, z);
+			};
+		}.runTaskLater(Litestrike.getInstance(), 3);
+	}
+
+	public static void start_planting(int x, int y, int z) {
+		new BukkitRunnable() {
+			int timer = 1;
+
+			@Override
+			public void run() {
+				Sound sound = Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 1.9f, 0.1f * timer);
+				Bukkit.getServer().playSound(sound, x, y, z);
+
+				if (timer % 3 == 0) {
+					Sound sound_bass = Sound.sound(Key.key("block.note_block.basedrum"), AMBIENT, 1.9f, 1f);
+					Bukkit.getServer().playSound(sound_bass, x, y, z);
+				}
+
+				timer++;
+				if (timer > 11) {
+					cancel();
+				}
+			}
+		}.runTaskTimer(Litestrike.getInstance(), 1, 1);
+	}
+
+	public static void potion_drink(Location l) {
+		l.getWorld().playSound(l, "entity.generic.drink", 1, 1);
+	}
+
+	public static void stop_planting(int x, int y, int z) {
+		new BukkitRunnable() {
+			int timer = 11;
+
+			@Override
+			public void run() {
+				Sound sound = Sound.sound(Key.key("block.note_block.bit"), AMBIENT, 1.9f, 0.1f * timer);
+				Bukkit.getServer().playSound(sound, x, y, z);
+
+				if (timer % 3 == 0) {
+					Sound sound_bass = Sound.sound(Key.key("block.note_block.basedrum"), AMBIENT, 1.9f, 1f);
+					Bukkit.getServer().playSound(sound_bass, x, y, z);
+				}
+				timer--;
+				if (timer < 1) {
+					cancel();
+				}
+			}
+		}.runTaskTimer(Litestrike.getInstance(), 1, 1);
+	}
+
+	public static void round_end_sound(Team winner) {
+		for (Player p : Bukkit.getOnlinePlayers()) {
+			Team player_team = Litestrike.getInstance().game_controller.teams.get_team(p);
+			if (player_team == null || player_team == winner) {
+				p.playSound(Sound.sound(Key.key("crystalized:effect.ls_game_won"), AMBIENT, 50, 1));
+			} else {
+				p.playSound(Sound.sound(Key.key("crystalized:effect.ls_game_lost"), AMBIENT, 50, 1));
+			}
+		}
+	}
+
+}

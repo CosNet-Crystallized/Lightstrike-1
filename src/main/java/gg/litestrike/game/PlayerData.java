@@ -1,0 +1,148 @@
+package gg.litestrike.game;
+
+import static net.kyori.adventure.text.Component.translatable;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextColor;
+
+public class PlayerData {
+
+	public String player;
+	private int money = 0;
+	public int kills = 0;
+	public int deaths = 0;
+	public int assists = 0;
+	private int total_money_gained = 0;
+	private int total_money_spent = 0;
+	public int plants = 0;
+	public int breaks = 0;
+	public float total_damage = 0;
+	public LastDamagerTracker ldt = new LastDamagerTracker();
+	public boolean did_leave = false;
+	public int jumps = 0;
+	public int hits_dealt = 0;
+	public int bow_shots = 0;
+
+	// shit for achievements
+	public int killsThisRound = 0;
+	public boolean eligibleForOnlyWeaponsAchievement = true; // true by default, false when violated.
+	public int roundWinsOnlyWeapons = 0;
+
+	public int antiHealTicks = 0;
+	// Cooldown between supportive arrow can heal the player again.
+	public int supportiveHealCooldownTicks = 0;
+
+	// this keeps track of assits in the current round for this player
+	public Map<Player, Double> assist_list = new HashMap<Player, Double>();
+
+	// ONLY construct this from PlayerDataManager pls
+	public PlayerData(Player p) {
+		player = p.getName();
+	}
+
+	// used for reseting money when switching teams
+	public void removeMoney() {
+		money = 0;
+		ScoreboardController.set_player_money(player, money);
+	}
+
+	public void addMoney(int amt, Component reason) {
+		if (amt <= 0) {
+			return;
+		}
+		Player p = Bukkit.getPlayer(player);
+		if (p == null) return;
+		p.sendMessage(translatable("crystalized.game.litestrike.money.receive").color(Litestrike.YELLOW)
+				.append(Component.text(amt + "\uE104").color(TextColor.color(0x0ab1c4)))
+				.append(reason.color(Litestrike.YELLOW)));
+		money += amt;
+		total_money_gained += amt;
+
+		ScoreboardController.set_player_money(player, money);
+	}
+
+	public void giveMoneyBack(int amt) {
+		addMoney(amt, translatable("crystalized.game.litestrike.money.selling"));
+		total_money_gained -= amt;
+		total_money_spent -= amt;
+	}
+
+	// returns false if not enought money was available
+	// returns true if the money was successfully subtracted
+	public boolean removeMoney(int amt) {
+		if (amt > money) {
+			return false;
+		} else {
+			if (!Litestrike.getInstance().gameConfig.freeShop) {
+				money -= amt;
+				total_money_spent += amt;
+				ScoreboardController.set_player_money(player, money);
+			}
+			return true;
+		}
+	}
+
+	public int getMoney() {
+		return this.money;
+	}
+
+	public String toString() {
+		return "\nname: " + player +
+				"\nmoney: " + money +
+				"\nkills: " + kills +
+				"\ndeaths: " + deaths +
+				"\n assists: " + assists +
+				"\nscore: " + calc_player_score();
+	}
+
+	public double calc_player_score() {
+		return (total_damage / 40) + breaks + plants;
+	}
+
+	public int getTotalMoneyGained() {
+		return total_money_gained;
+	}
+
+	public int getTotalMoneySpent() {
+		return total_money_spent;
+	}
+
+}
+
+class LastDamagerTracker {
+	private int counter = 0;
+	private Player player;
+
+	public LastDamagerTracker() {
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				counter--;
+				if (player != null && counter == 1) {
+					player = null;
+				}
+			}
+		}.runTaskTimerAsynchronously(Litestrike.getInstance(), 10, 20);
+	}
+
+	public Player get_last_damager() {
+		return player;
+	}
+
+	public void update_damager(Player p) {
+		counter = 15;
+		player = p;
+	}
+
+	public void clear_damager() {
+		counter = 0;
+		player = null;
+	}
+}

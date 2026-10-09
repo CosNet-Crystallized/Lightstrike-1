@@ -1,0 +1,624 @@
+package gg.litestrike.game;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+
+import gg.crystalized.lobby.*;
+import org.bukkit.*;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.entity.Arrow;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.Firework;
+import org.bukkit.entity.Item;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.SpectralArrow;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.FireworkMeta;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitRunnable;
+
+import io.papermc.paper.entity.LookAnchor;
+import net.kyori.adventure.audience.Audience;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+
+import com.google.common.io.ByteArrayDataOutput;
+import com.google.common.io.ByteStreams;
+
+import static net.kyori.adventure.text.Component.text;
+import static net.kyori.adventure.text.Component.translatable;
+
+// This will be created by something else, whenever there are 6+ people online
+// and no game is currently going
+public class GameController {
+	public Teams teams = new Teams();
+	public PlayerDataManager playerDataManager = new PlayerDataManager();
+	public Bomb bomb;
+
+	public int round_number = 0;
+	public RoundState round_state = RoundState.PreRound;
+
+	public List<Team> round_results = new ArrayList<Team>();
+	public int placer_wins_amt = 0;
+	public int breaker_wins_amt = 0;
+
+	public HashMap<String, Shop> shopList = new HashMap<>();
+
+	// the phase_timer starts counting up from the beginning of the round
+	// after it reaches (15 * 20), the game is started. when the round winner is
+	// determined its reset to 0 and counts until (5 * 20) for the postround time.
+	// then the next round starts and it counts from 0 again
+	public int phase_timer = 0;
+
+	// the game_reference is printed in chat so that we can later search for the
+	// number in the chat logs
+	public final int game_reference = ThreadLocalRandom.current().nextInt(0, Integer.MAX_VALUE - 1);
+
+	public record SupportiveCircle(Location location, Team team) {}
+	public final List<SupportiveCircle> supportiveCircles = new ArrayList<>();
+
+	public enum RoundState {
+		PreRound,
+		Running,
+		PostRound,
+		GameFinished,
+	}
+
+	public GameController() {
+		Bukkit.getLogger().info("Starting game with game_id: " + game_reference);
+		for (Player player : teams.get_all_players()) {
+			playerDataManager.addPlayer(player);
+		}
+		//could be in team constructor as well, but then it will need to be duplicated for manual and non manual teams
+		teams.updateTeamPDC();
+
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				new TabListController();
+				for (Player player : teams.get_all_players()) {
+					Shop s = new Shop(player);
+					s.resetEquip();
+					s.resetEquipCounters();
+				}
+				next_round();
+			}
+		}.runTaskLater(Litestrike.getInstance(), 1);
+
+		// setup scoreboard and bossbar
+		ScoreboardController.setup_scoreboard(teams, game_reference);
+		Litestrike.getInstance().bbd.showBossBar();
+
+		// This just calls update_game_state() once every second
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				boolean game_over = update_game_state();
+				if (game_over) {
+					for (Player p : Bukkit.getOnlinePlayers()) {
+						p.kick();
+					}
+					Litestrike.getInstance().party_manager.clear_partys();
+					Litestrike.getInstance().game_controller = null;
+					cancel();
+				}
+			}
+		}.runTaskTimer(Litestrike.getInstance(), 20, 1);
+
+	}
+
+	// This is run every tick
+	private boolean update_game_state() {
+		phase_timer += 1;
+
+
+		// if round_state is GameFinished then the podium is already running
+		Team winner = check_if_podium_start();
+		if (winner != null) {
+			start_podium(winner);
+		}
+
+		// this is like a state-machine, it will check the current state, check a
+		// condition, and
+		// if the condition is met, call a method to advance to the next state
+		switch (round_state) {
+			case RoundState.PreRound: {
+				if (phase_timer == Litestrike.getInstance().gameConfig.preRoundTime) {
+					start_round();
+				}
+			}
+				break;
+			case RoundState.Running: {
+				LSItem.doSupportingArrow(this);
+				if (determine_winner() != null) {
+					finish_round(determine_winner());
+				}
+			}
+				break;
+			case RoundState.PostRound: {
+				if (phase_timer == Litestrike.getInstance().gameConfig.postRoundTime) {
+					next_round();
+				}
+			}
+				break;
+			case RoundState.GameFinished: {
+				if (phase_timer == Litestrike.getInstance().gameConfig.finishTime) {
+					return true; // remove the update_game_state task
+				}
+			}
+				break;
+		}
+		return false;
+	}
+
+	// this checks if the podium should start
+	private Team check_if_podium_start() {
+
+		// if round_state is GameFinished then podium is already started
+		if (round_state == RoundState.GameFinished) {
+			return null;
+		}
+
+		// if the enemy team is empty, or if the team has reached the required rounds,
+		// win
+		if (teams.get_placers().size() == 0 || breaker_wins_amt == Litestrike.getInstance().gameConfig.switchRound + 1) {
+			return Team.Breaker;
+		}
+		if (teams.get_breakers().size() == 0 || placer_wins_amt == Litestrike.getInstance().gameConfig.switchRound + 1) {
+			return Team.Placer;
+		}
+
+		// end if a team has reached the required wins
+		return null;
+	}
+
+	// this is called when we switch from PreRound to Running
+	private void start_round() {
+		round_state = RoundState.Running;
+		phase_timer = 0;
+
+		// send messages to the teams
+		if (round_number == 1) {
+			Audience.audience(teams.get_placers()).sendMessage(text("\n")
+					.append(translatable("crystalized.game.litestrike.tutorial.generic1")).color(Litestrike.YELLOW)
+					.append(Litestrike.PLACER_TEXT)
+					.append(text("\n"))
+					.append(translatable("crystalized.game.litestrike.tutorial.placer1").color(Litestrike.YELLOW))
+					.append(text("\n"))
+					.append(translatable("crystalized.game.litestrike.tutorial.placer2").color(Litestrike.YELLOW))
+					.append(text("\n")));
+			Audience.audience(teams.get_breakers()).sendMessage(text("\n")
+					.append(translatable("crystalized.game.litestrike.tutorial.generic1")).color(Litestrike.YELLOW)
+					.append(Litestrike.BREAKER_TEXT)
+					.append(text("\n"))
+					.append(translatable("crystalized.game.litestrike.tutorial.breaker1").color(Litestrike.YELLOW))
+					.append(text("\n"))
+					.append(translatable("crystalized.game.litestrike.tutorial.breaker2").color(Litestrike.YELLOW))
+					.append(text("\n")));
+		}
+
+		Litestrike ls = Litestrike.getInstance();
+
+		// remove the border
+		ls.mapdata.lowerBorder(Bukkit.getWorld("world"));
+		Litestrike.getInstance().sendPluginMessage("crystalized:essentials", "BreezeDagger_DisableRecharging:true");
+
+		for (Player p : teams.get_all_players()) {
+			Shop.removeShop(p);
+			PlayerInventory inv = p.getInventory();
+			for (int i = 0; i < inv.getSize(); i++) {
+				if (LSItem.isBreezeDagger(inv.getItem(i))) {
+					ItemMeta meta = inv.getItem(i).getItemMeta();
+					PersistentDataContainer cont = meta.getPersistentDataContainer();
+					cont.set(LSItem.BREEZE_DAGGER_STATE_KEY, PersistentDataType.INTEGER, 2);
+					inv.getItem(i).setItemMeta(meta);
+				}
+			}
+
+			// achievement shit, check if we can allow ls_onlyweapon achievement progress
+			// for this round
+			if (inv.getChestplate().getType().equals(Material.LEATHER_CHESTPLATE) &&
+					!inv.contains(Material.GOLDEN_APPLE) && !inv.contains(Material.POTION)) {
+				playerDataManager.get(p).eligibleForOnlyWeaponsAchievement = true;
+			}
+		}
+	}
+
+	// this is called when we switch from Running to PostRound
+	private void finish_round(Team winner) {
+		round_state = RoundState.PostRound;
+		phase_timer = 0;
+		round_results.add(winner);
+		if (winner == Team.Placer) {
+			placer_wins_amt += 1;
+		} else {
+			breaker_wins_amt += 1;
+		}
+
+		ScoreboardController.set_win_display();
+
+		// remove arrows and items
+		for (Entity e : Bukkit.getWorld("world").getEntities()) {
+			if (e instanceof Arrow || e instanceof Item || e instanceof SpectralArrow) {
+				e.remove();
+			}
+		}
+
+		// announce winner
+		Component winner_component;
+		if (winner == Team.Placer) {
+			winner_component = Litestrike.PLACER_TEXT;
+			Bukkit.getLogger().info("The Placer Team won round " + round_number);
+		} else {
+			winner_component = Litestrike.BREAKER_TEXT;
+			Bukkit.getLogger().info("The Breaker Team won round " + round_number);
+		}
+		Audience.audience(Bukkit.getOnlinePlayers())
+				.sendMessage(text("\nᴛʜᴇ ").color(Litestrike.YELLOW).append(winner_component)
+						.append(text(" ᴛᴇᴀᴍ ᴡᴏɴ ʀᴏᴜɴᴅ ").color(Litestrike.YELLOW)).append(text(round_number))
+						.append(text("!\n").color(Litestrike.YELLOW)));
+
+		Litestrike.getInstance().sendPluginMessage("crystalized:essentials", "BreezeDagger_DisableRecharging:false");
+
+		// achievement shit, ls_lastalive achievement
+		try {
+			List<Player> alivePlacers = teams.get_alive_placers();
+			if (alivePlacers.size() == 1 && winner.equals(Team.Placer)) {
+				Achievement.getAchievement("ls_lastalive", alivePlacers.getFirst()).setProgress(100);
+			}
+			List<Player> aliveBreakers = teams.get_alive_breakers();
+			if (aliveBreakers.size() == 1 && winner.equals(Team.Breaker)) {
+				Achievement.getAchievement("ls_lastalive", aliveBreakers.getFirst()).setProgress(100);
+			}
+		} catch (NoClassDefFoundError ex) {
+		}
+
+		for (Player p : teams.get_all_players()) {
+			PlayerData pd = playerDataManager.get(p);
+			pd.assist_list.clear();
+			pd.ldt.clear_damager();
+			Inventory inv = p.getInventory();
+			for (int i = 0; i < inv.getSize(); i++) {
+				if (LSItem.is_underdog_sword(inv.getItem(i))) {
+					inv.setItem(i, LSItem.do_underdog_sword(teams.get_team(p)));
+				}
+			}
+			if (teams.get_team(p) == winner) {
+				pd.addMoney(Litestrike.getInstance().gameConfig.winRoundMoney,
+						translatable("crystalized.game.litestrike.money.win_round"));
+				SoundEffects.round_won(p);
+
+				// achievement shit
+				int killed_percentage = (pd.killsThisRound * 100) / teams.get_enemy_team_of(p).size();
+				try {
+					Achievement.getAchievement("ls_ace", p).setProgress(killed_percentage);
+				} catch (NoClassDefFoundError e) {
+				}
+			} else {
+				pd.addMoney(Litestrike.getInstance().gameConfig.loseRoundMoney,
+						translatable("crystalized.game.litestrike.money.loose_round"));
+				SoundEffects.round_lost(p);
+			}
+
+			// achievement shit, ls_onlyweapon checked and given here
+			if (pd.eligibleForOnlyWeaponsAchievement && pd.roundWinsOnlyWeapons != 4
+					&& pd.killsThisRound == teams.get_enemy_team_of(p).size()) {
+				if (!teams.get_team(p).equals(winner)) {
+					continue;
+				}
+				pd.roundWinsOnlyWeapons++;
+				try {
+					Achievement a = Achievement.getAchievement("ls_onlyweapons", p);
+					a.setProgress((pd.roundWinsOnlyWeapons * 100) / 4); // 100% on 4 round wins
+				} catch (NoClassDefFoundError e) {
+				}
+			}
+			pd.killsThisRound = 0;
+		}
+	}
+
+	// this is called when the last round is over and the podium should begin
+	private void start_podium(Team winner) {
+		round_state = RoundState.GameFinished;
+		phase_timer = 0;
+		if (bomb != null) {
+			bomb.remove();
+			bomb = null;
+		}
+
+		for (Player p : teams.get_all_players()) {
+			p.setGameMode(GameMode.ADVENTURE);
+			p.setAllowFlight(true);
+		}
+
+		World w = Bukkit.getWorld("world");
+
+		print_result_table(winner);
+		teleport_players_podium(w);
+		SoundEffects.round_end_sound(winner);
+
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				LsDatabase.save_game(winner);
+				for (Player p : teams.get_all_players()) {
+					try {
+						LevelManager.giveExperience(p, 5);
+						LevelManager.giveMoney(p, 20);
+					} catch (NoClassDefFoundError e) {
+					}
+				}
+			}
+		}.runTaskAsynchronously(Litestrike.getInstance());
+
+		try {
+			for (Player p : Bukkit.getOnlinePlayers()) {
+				InventoryManager.giveLobbyItems(p);
+				p.getInventory().setItem(App.BackToHub.slot, App.BackToHub.build());
+				p.getInventory().setItem(App.Requeue.slot, App.Requeue.build());
+				if (winner.equals(teams.get_team(p))) {
+					Achievement.getAchievement("ls_win", p).setProgress(100);
+				}
+			}
+		} catch (NoClassDefFoundError e) {
+		}
+		// summon fireworks
+		new BukkitRunnable() {
+			int i = 0;
+
+			@Override
+			public void run() {
+				i++;
+				if (i == 4) {
+					cancel();
+				}
+				for (Player p : teams.get_team_of(winner)) {
+					Firework fw = w.spawn(p.getLocation(), Firework.class);
+					FireworkMeta fwm = fw.getFireworkMeta();
+					fwm.setPower(2);
+					FireworkEffect effect1 = FireworkEffect.builder().with(FireworkEffect.Type.BALL).withTrail()
+							.withColor(Color.RED).withColor(Color.BLUE).build();
+					FireworkEffect effect2 = FireworkEffect.builder().with(FireworkEffect.Type.CREEPER).withFlicker().withTrail()
+							.withColor(Color.GREEN).withColor(Color.AQUA).build();
+					fwm.addEffects(effect1, effect2);
+					fw.setFireworkMeta(fwm);
+				}
+			}
+		}.runTaskTimer(Litestrike.getInstance(), 0, (20 * 2));
+
+		// this sends players back to lobby
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				ByteArrayDataOutput out = ByteStreams.newDataOutput();
+				out.writeUTF("Connect");
+				out.writeUTF("lobby");
+				for (Player p : Bukkit.getOnlinePlayers()) {
+					p.sendPluginMessage(Litestrike.getInstance(), "crystalized:main", out.toByteArray());
+				}
+			}
+		}.runTaskLater(Litestrike.getInstance(), Litestrike.getInstance().gameConfig.finishTime - (20 * 2));
+	}
+
+	// called when we go from PostRound to PreRound and when the first round starts
+	private void next_round() {
+		round_state = RoundState.PreRound;
+		phase_timer = 0;
+		round_number += 1;
+
+		if (bomb != null) {
+			bomb.remove();
+			bomb = null;
+		}
+
+		Litestrike ls = Litestrike.getInstance();
+		if (ls.mapdata.map_features != null) {
+			// this resets movable parts of the map, like the door on Cargo
+			ls.mapdata.map_features.reset_structures();
+		}
+
+		if (round_number == Litestrike.getInstance().gameConfig.switchRound + 1) {
+			Audience.audience(Bukkit.getOnlinePlayers())
+					.sendMessage(translatable("crystalized.game.litestrike.switching").color(Litestrike.YELLOW));
+			Bukkit.getLogger().info("Switching the Sides");
+			teams.switch_teams();
+			//updates the teams presistant datayh contianters when they switch
+			teams.updateTeamPDC();
+			for (PlayerData pd : playerDataManager.getAll()) {
+				pd.removeMoney();
+			}
+			for (int i = 0; i < round_results.size(); i++) {
+				if (round_results.get(i) == Team.Placer) {
+					round_results.set(i, Team.Breaker);
+				} else {
+					round_results.set(i, Team.Placer);
+				}
+			}
+			int tmp = breaker_wins_amt;
+			breaker_wins_amt = placer_wins_amt;
+			placer_wins_amt = tmp;
+			ScoreboardController.setup_scoreboard(teams, game_reference);
+			ScoreboardController.set_win_display();
+			for (Shop s : this.shopList.values()) {
+				s.resetEquip();
+				s.resetEquipCounters();
+			}
+		}
+		if (round_number == (Litestrike.getInstance().gameConfig.switchRound * 2) + 1) {
+			Audience.audience(Bukkit.getOnlinePlayers())
+					.sendMessage(translatable("crystalized.game.litestrike.tie_breaker").color(Litestrike.YELLOW));
+			for (PlayerData pd : playerDataManager.getAll()) {
+				pd.removeMoney();
+				pd.addMoney(Litestrike.getInstance().gameConfig.lastRoundMoney,
+						translatable("crystalized.game.litestrike.money.last_round"));
+			}
+			for (Shop s : this.shopList.values()) {
+				s.resetEquip();
+				s.resetEquipCounters();
+			}
+		}
+
+		World w = Bukkit.getWorld("world");
+		Litestrike.getInstance().mapdata.raiseBorder(w);
+
+		// teleport everyone to spawn and make them look at enemy spawn
+		Location placer_spawn = Litestrike.getInstance().mapdata.get_placer_spawn(w);
+		Location breaker_spawn = Litestrike.getInstance().mapdata.get_breaker_spawn(w);
+		for (Player p : teams.get_breakers()) {
+			p.teleport(breaker_spawn);
+			p.lookAt(placer_spawn.x(), placer_spawn.y(), placer_spawn.z(), LookAnchor.EYES);
+		}
+		for (Player p : teams.get_placers()) {
+			p.teleport(placer_spawn);
+			p.lookAt(breaker_spawn.x(), breaker_spawn.y(), breaker_spawn.z(), LookAnchor.EYES);
+		}
+
+		// heal and set everyone to survival
+		for (Player p : teams.get_all_players()) {
+			Shop.giveDefaultArmor(p);
+			p.setGameMode(GameMode.SURVIVAL);
+			p.setHealth(p.getAttribute(Attribute.MAX_HEALTH).getValue());
+			p.clearActivePotionEffects();
+
+			// clear supporting arrow
+			playerDataManager.get(p).antiHealTicks = 0;
+			playerDataManager.get(p).supportiveHealCooldownTicks = 0;
+			p.getPersistentDataContainer().remove(LSItem.NEGATIVE_EFFECT_IMMUNITY);
+			supportiveCircles.clear();
+
+			playerDataManager.get(p).addMoney(Litestrike.getInstance().gameConfig.nextRoundMoney,
+					translatable("crystalized.game.litestrike.money.next_round"));
+			Shop s = this.getShop(p);
+			s.resetEquipCounters();
+			s.previousEquip.clear();
+			// this is needed because of some weird packet nonsense, to make everyone glow
+			p.setSneaking(true);
+			p.setSneaking(false);
+		}
+
+		// set spectators to spectator_mode every round
+		for (Player p : Bukkit.getOnlinePlayers()) {
+			if (teams.get_all_players().contains(p)) {
+				continue;
+			}
+			p.setGameMode(GameMode.SPECTATOR);
+		}
+
+		// sound effect has a cooldown, so we call it here instead of in round_start
+		SoundEffects.round_start();
+
+		// give bomb to a random player
+		// generate int between 0 and placer teams size
+		int random = ThreadLocalRandom.current().nextInt(0, teams.get_placers().size());
+		Bomb.give_bomb(teams.get_placers().get(random));
+
+		Shop.giveShop_and_update();
+		Communicator.giveRadio();
+	}
+
+	// this will determine the winner of the round and return it.
+	// if the round isnt over, it will return null
+	private Team determine_winner() {
+		if (bomb instanceof PlacedBomb) {
+			PlacedBomb pb = (PlacedBomb) bomb;
+			if (pb.is_detonated) {
+				return Team.Placer;
+			}
+			if (pb.is_broken) {
+				return Team.Breaker;
+			}
+		}
+
+		boolean all_breakers_dead = true;
+		for (Player p : teams.get_breakers()) {
+			// if a breaker isnt in spectator mode they are alive
+			if (p.getGameMode() != GameMode.SPECTATOR) {
+				all_breakers_dead = false;
+				break;
+			}
+		}
+		if (all_breakers_dead) {
+			return Team.Placer;
+		}
+
+		// if the bomb is Placed we skip the rest of the checks
+		if (bomb instanceof PlacedBomb) {
+			return null;
+		}
+
+		if (phase_timer == Litestrike.getInstance().gameConfig.runningTime) {
+			return Team.Breaker;
+		}
+
+		// check if all placers are alive
+		boolean all_placers_dead = true;
+		for (Player p : teams.get_placers()) {
+			// if a placer isnt in spectator mode they are alive
+			if (p.getGameMode() != GameMode.SPECTATOR) {
+				all_placers_dead = false;
+				break;
+			}
+		}
+		if (all_placers_dead) {
+			return Team.Breaker;
+		}
+
+		return null;
+	}
+
+	private void print_result_table(Team winner) {
+		Server s = Bukkit.getServer();
+		s.sendMessage(text("-----------------------------\n").color(NamedTextColor.GOLD));
+		s.sendMessage(text(" ʟɪᴛᴇsᴛʀɪᴋᴇ").color(NamedTextColor.GREEN).append(text(" \uE100").color(NamedTextColor.WHITE)));
+		s.sendMessage(text("Winner: ").color(NamedTextColor.GOLD).decorate(TextDecoration.BOLD)
+				.append(winner == Team.Placer ? Litestrike.PLACER_TEXT : Litestrike.BREAKER_TEXT));
+		s.sendMessage(translatable("crystalized.game.generic.gameresults").color(NamedTextColor.BLUE)
+				.decorate(TextDecoration.BOLD)
+				.append(text(":")));
+
+		List<PlayerData> sorted = playerDataManager.getSortedByScore();
+		String[] labels = { " 1st. ", "   2nd. ", "   3rd. " };
+		NamedTextColor[] colors = { NamedTextColor.GREEN, NamedTextColor.YELLOW, NamedTextColor.YELLOW };
+
+		for (int i = 0; i < Math.min(3, sorted.size()); i++) {
+			PlayerData pd = sorted.get(i);
+			Component prefix = i == 0 ? text(" \uE108").color(NamedTextColor.WHITE) : text("");
+			s.sendMessage(prefix.append(text(labels[i]).color(colors[i]))
+					.append(text(pd.player)).append(text(" ".repeat(20 - pd.player.length())))
+					.append(text(pd.kills + " / " + pd.deaths + " / " + pd.assists)));
+		}
+		s.sendMessage(text("-----------------------------\n").color(NamedTextColor.GOLD));
+	}
+
+	// teleports players to the podium
+	private void teleport_players_podium(World w) {
+		MapData md = Litestrike.getInstance().mapdata;
+
+		if (md.podium == null) {
+			// dont teleport if there are no podium coordinates
+			return;
+		}
+		for (Player p : teams.get_all_players()) {
+			p.setGameMode(GameMode.ADVENTURE);
+		}
+		List<PlayerData> sorted = playerDataManager.getSortedByScore();
+		Location[] podium = { md.podium.get_first(w), md.podium.get_second(w), md.podium.get_third(w) };
+		for (int i = 0; i < sorted.size(); i++) {
+			Player p = Bukkit.getPlayer(sorted.get(i).player);
+			if (p == null) {
+				continue;
+			}
+			p.teleport(i < 3 ? podium[i] : md.podium.get_spawn(w));
+		}
+	}
+
+	public Shop getShop(OfflinePlayer p) {
+		return shopList.get(p.getName());
+	}
+}

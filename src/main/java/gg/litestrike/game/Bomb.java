@@ -1,0 +1,320 @@
+package gg.litestrike.game;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
+import org.bukkit.entity.Item;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.inventory.meta.components.CustomModelDataComponent;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.util.Vector;
+
+import net.kyori.adventure.text.format.TextColor;
+import net.kyori.adventure.key.Key;
+import net.kyori.adventure.sound.Sound;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import net.kyori.adventure.title.Title;
+import static org.bukkit.Particle.*;
+import static net.kyori.adventure.text.Component.text;
+
+public interface Bomb {
+	static final int DETONATION_TIME = (20 * 40);
+
+	public static ItemStack bomb_item() {
+		ItemStack item = new ItemStack(Material.ZOMBIE_SPAWN_EGG);
+		ItemMeta im = item.getItemMeta();
+
+		// set item lore
+		List<Component> lore = new ArrayList<Component>();
+		lore.add(Component.translatable("crystalized.item.bomb.desc").color(TextColor.color(0xf4d167))
+				.decoration(TextDecoration.ITALIC, false));
+		lore.add(Component.translatable("crystalized.item.bomb.desc2").color(TextColor.color(0xf4d167))
+				.decoration(TextDecoration.ITALIC, false));
+		lore.add(Component.translatable("crystalized.item.bomb.desc3").color(NamedTextColor.GRAY)
+				.decoration(TextDecoration.ITALIC, false));
+		im.lore(lore);
+
+		im.setItemModel(new NamespacedKey("crystalized", "models/bomb/shard"));
+		CustomModelDataComponent cmdc = im.getCustomModelDataComponent();
+		cmdc.setFloats(List.of(BombModel.MODEL_ACTIVE));
+		im.setCustomModelDataComponent(cmdc);
+
+		im.displayName(Component.translatable("crystalized.item.bomb.name").color(TextColor.color(0xe64cce))
+				.decoration(TextDecoration.ITALIC, false).decoration(TextDecoration.BOLD, true));
+
+		item.setItemMeta(im);
+		return item;
+	}
+
+	public static void give_bomb(Player inv) {
+		// some sanity checks
+		Bomb b = Litestrike.getInstance().game_controller.bomb;
+		if (b instanceof InvItemBomb || b instanceof PlacedBomb) {
+			// bomb was in a invalid state
+			Bukkit.getLogger().severe("ERROR: bomb got given while already placed or in inv. Check the Bomb Logic!");
+			for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+				Bukkit.getLogger().severe(ste.toString());
+			}
+		}
+
+		if (b != null) {
+			b.remove();
+		}
+		Litestrike.getInstance().game_controller.bomb = new InvItemBomb(inv);
+	}
+
+	public static String get_arrow(Player p, Location loc2) {
+		Location p_loc = p.getLocation().clone();
+		p_loc.setY(0);
+		p_loc.setPitch(0);
+
+		Location loc = loc2.clone();
+		loc.setY(0);
+
+		Vector blockDirection = loc.subtract(p_loc).toVector().normalize();
+
+		double x1 = blockDirection.getX();
+		double z1 = blockDirection.getZ();
+		double x2 = p_loc.getDirection().getX();
+		double z2 = p_loc.getDirection().getZ();
+
+		double angle = Math.toDegrees(Math.atan2(x1 * z2 - z1 * x2, x1 * x2 + z1 * z2));
+
+		if (angle >= -22.5 && angle <= 22.5) {
+			return "\uE110";
+		} else if (angle <= 67.5 && angle > 0) {
+			return "\uE117";
+		} else if (angle <= 112.5 && angle > 0) {
+			return "\uE116";
+		} else if (angle <= 157.5 && angle > 0) {
+			return "\uE115";
+		} else if (angle >= -67.5 && angle < 0) {
+			return "\uE111";
+		} else if (angle >= -112.5 && angle < 0) {
+			return "\uE112";
+		} else if (angle >= -157.5 && angle < 0) {
+			return "\uE113";
+		} else if (angle <= 190 && angle >= -190) {
+			return "\uE114";
+		} else {
+			return "error invalid angle";
+		}
+	}
+
+	public void remove();
+}
+
+class DroppedBomb implements Bomb {
+	Item item;
+
+	public DroppedBomb(Item item) {
+		this.item = item;
+
+		item.setGlowing(true);
+		item.setInvulnerable(true);
+
+		ProtocolLibLib.update_armor();
+	}
+
+	public String get_bomb_loc_string(Player p) {
+		if (item == null || item.isDead()) {
+			return "Dropped, but the item is dead.";
+		}
+		String arrow = Bomb.get_arrow(p, item.getLocation());
+		return "Dropped Somewhere " + arrow;
+	}
+
+	@Override
+	public void remove() {
+		item.remove();
+	}
+}
+
+class PlacedBomb implements Bomb {
+	public Block block;
+	private BombModel bomb_model;
+	private BlockFace bf;
+
+	public boolean is_detonated = false;
+	public boolean is_broken = false;
+	public int timer = 0;
+
+	public PlacedBomb(Block block, BombModel bm, BlockFace bf) {
+		this.block = block;
+		this.bomb_model = bm;
+		this.bf = bf;
+
+		SoundEffects.bomb_plant_finish(block.getLocation());
+		block.setType(Material.BARRIER);
+		Bukkit.getServer().showTitle(Title
+				.title(Component.translatable("crystalized.game.litestrike.bombplanted").color(Litestrike.YELLOW), text("")));
+		start_explosion_timer();
+		bomb_model.bomb_plant(block.getLocation(), bf);
+
+		start_bomb_falling_logic();
+
+		ProtocolLibLib.update_armor();
+	}
+
+	public String get_bomb_loc_string(Player p) {
+		String arrow = Bomb.get_arrow(p, block.getLocation());
+		return "Placed at a site " + arrow;
+	}
+
+	@Override
+	public void remove() {
+		block.setType(Material.AIR);
+		bomb_model.remove();
+	}
+
+	// if the bomb is planted and the block under it disappears it should fall down
+	// if its planted upside down or on the side, what should happen?
+	private void start_bomb_falling_logic() {
+		new BukkitRunnable() {
+			@Override
+			public void run() {
+				if (!(Litestrike.getInstance().game_controller.bomb instanceof PlacedBomb) || is_broken || is_detonated) {
+					cancel();
+					return;
+				}
+				if (block.getType() != Material.BARRIER && block.isEmpty()) {
+					Bukkit.getLogger().warning("[Litestrike] bomb barrier missing at " + block.getLocation() + ", restoring");
+					block.setType(Material.BARRIER);
+				}
+
+				Block new_block = block.getRelative(bf.getOppositeFace());
+				if (new_block.isEmpty()) {
+					block.setType(Material.AIR);
+					new_block.setType(Material.BARRIER);
+					bomb_model.bomb_plant(new_block.getLocation(), bf);
+					block = new_block;
+				}
+
+			}
+
+		}.runTaskTimer(Litestrike.getInstance(), 1, 10);
+	}
+
+	private void start_explosion_timer() {
+		new BukkitRunnable() {
+			int last_beep = 0;
+			Sound sound;
+
+			@Override
+			public void run() {
+				if (!(Litestrike.getInstance().game_controller.bomb instanceof PlacedBomb) || is_broken || is_detonated) {
+					cancel();
+					return;
+				}
+
+				timer += 1;
+
+				int freq = 20 + (int) (-0.025 * timer);
+				if (timer - last_beep > freq) {
+					last_beep = timer;
+
+					if ((20 * 20) > timer) {
+						sound = Sound.sound(Key.key("crystalized:effect.shard.beep_1"), Sound.Source.AMBIENT, 2, 1);
+					} else if ((30 * 20) > timer) {
+						sound = Sound.sound(Key.key("crystalized:effect.shard.beep_2"), Sound.Source.AMBIENT, 2, 1);
+					} else {
+						sound = Sound.sound(Key.key("crystalized:effect.shard.beep_3"), Sound.Source.AMBIENT, 2, 1);
+					}
+					Bukkit.getServer().playSound(sound, block.getX(), block.getY(), block.getZ());
+					block.getWorld().spawnParticle(RAID_OMEN, block.getLocation().add(0.5, 0.5, 0.5), 3);
+				}
+
+				if (timer == DETONATION_TIME) {
+					remove();
+					explode();
+					cancel();
+				}
+			}
+
+		}.runTaskTimer(Litestrike.getInstance(), 1, 1);
+	}
+
+	private void explode() {
+		is_detonated = true;
+		block.getWorld().spawnParticle(LANDING_LAVA, block.getLocation().add(0.5, 0.5, 0.5), 5000, 1, 1, 1);
+		block.getWorld().spawnParticle(CAMPFIRE_COSY_SMOKE, block.getLocation().add(0.5, 0.5, 0.5), 500, 1, 1, 1);
+		// block.getWorld().playSound(Sound.sound(Key.key("entity.dragon_fireball.explode"),
+		// Sound.Source.AMBIENT, 20, 1),
+		// block.getX(), block.getY(), block.getZ());
+		block.getWorld().playSound(Sound.sound(Key.key("crystalized:effect.shard.detonation"), Sound.Source.AMBIENT, 20, 1),
+				block.getX(), block.getY(), block.getZ());
+		for (Player p : Litestrike.getInstance().game_controller.teams.get_all_players()) {
+			double distance = p.getLocation().distance(block.getLocation());
+			if (distance < 15) {
+				p.setHealth(0);
+			}
+			if (distance < 30) {
+				p.damage(30 - distance);
+			}
+		}
+
+		// the explosion animation
+		new BukkitRunnable() {
+			int i = 0;
+
+			@Override
+			public void run() {
+				// if (i % 10 == 0) {
+				// block.getWorld().playSound(Sound.sound(Key.key("block.note_block.harp"),
+				// Sound.Source.AMBIENT, 1, 1),
+				// block.getX(), block.getY(), block.getZ());
+				// }
+				i += 1;
+				if (i == (20 * 4)) {
+					remove();
+					cancel();
+				}
+			}
+		}.runTaskTimer(Litestrike.getInstance(), 1, 1);
+	}
+
+}
+
+class InvItemBomb implements Bomb {
+	Player player;
+
+	public InvItemBomb(Player p) {
+		this.player = p;
+		player.getInventory().addItem(Bomb.bomb_item());
+
+		ProtocolLibLib.update_armor();
+	}
+
+	public String get_bomb_loc_string(Player p) {
+		if (p == player) {
+			return "In your Inventory";
+		}
+		String arrow = Bomb.get_arrow(p, player.getLocation());
+		return arrow + " Held by " + player.getName();
+	}
+
+	@Override
+	public void remove() {
+		player.getInventory().removeItemAnySlot(Bomb.bomb_item());
+	}
+
+	public void place_bomb(Block bomb_block, BombModel bm, BlockFace bf) {
+		remove();
+		Litestrike.getInstance().game_controller.bomb = new PlacedBomb(bomb_block, bm, bf);
+	}
+
+	public void drop_bomb(Item item) {
+		remove();
+		Litestrike.getInstance().game_controller.bomb = new DroppedBomb(item);
+	}
+}

@@ -1,0 +1,9 @@
+name: Litestrike
+version: 0.0.1
+main: gg.litestrike.game.Litestrike
+api-version: '26.2'
+load: POSTWORLD
+
+# softdepend: [Crystalized_Essentials]
+
+depend: [packetevents, Crystalized_Essentials, floodgate]
