@@ -75,7 +75,7 @@ public class ScoreboardController {
 			return;
 		}
 
-		Component title = text("LITESTRIKE").color(NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true)
+		Component title = text("LIGHTSTRIKE").color(NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true)
 				.append(text(" \uE100").color(NamedTextColor.WHITE));
 		if (Litestrike.getInstance().gameConfig.ranked) {
 			title = title.append(text(" RANKED").color(TextColor.color(0xfbc522)).decoration(TextDecoration.BOLD, true));
@@ -137,7 +137,7 @@ public class ScoreboardController {
 		obj.getScore("1").customName(text(""));
 
 		obj.getScore("0").setScore(0);
-		obj.getScore("0").customName(text("ᴄʀʏꜱᴛᴀʟɪᴢᴇᴅ.ᴄᴄ ").color(TextColor.color(0xc4b50a))
+		obj.getScore("0").customName(text("ᴄᴏꜱɴᴇᴛ.ᴄᴄ ").color(TextColor.color(0xc4b50a))
 				.append(text("" + game_id).color(NamedTextColor.GRAY)));
 
 		Team bomb_loc = sb.registerNewTeam("bomb_loc");
@@ -274,7 +274,7 @@ class BedrockScoreboard {
 	public BedrockScoreboard(Player p, gg.litestrike.game.Team t, Teams teams, int game_id) {
 		Scoreboard sb = Bukkit.getScoreboardManager().getNewScoreboard();
 
-		Component title = text("LITESTRIKE").color(NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true)
+		Component title = text("LIGHTSTRIKE").color(NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true)
 				.append(text(" \uE100").color(NamedTextColor.WHITE));
 		if (Litestrike.getInstance().gameConfig.ranked) {
 			title = title.append(text(" RANKED").color(TextColor.color(0xfbc522)).decoration(TextDecoration.BOLD, true));
@@ -327,7 +327,7 @@ class BedrockScoreboard {
 		obj.getScore("1").customName(text(""));
 
 		obj.getScore("0").setScore(0);
-		obj.getScore("0").customName(text("ᴄʀʏꜱᴛᴀʟɪᴢᴇᴅ.ᴄᴄ ").color(TextColor.color(0xc4b50a))
+		obj.getScore("0").customName(text("ᴄᴏꜱɴᴇᴛ.ᴄᴄ ").color(TextColor.color(0xc4b50a))
 				.append(text("" + game_id).color(NamedTextColor.GRAY)));
 
 		p.setScoreboard(sb);

@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 class TabListController {
-	private static final Component TAB_HEADER = text("LITESTRIKE").color(NamedTextColor.GREEN)
+	private static final Component TAB_HEADER = text("LIGHTSTRIKE").color(NamedTextColor.GREEN)
 			.decoration(TextDecoration.BOLD, true).append(text(" \uE100").color(NamedTextColor.WHITE));
 	private static final Component FOOTER_PREFIX = text("")
 			.append(

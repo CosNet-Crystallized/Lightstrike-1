@@ -21,7 +21,7 @@ public class QueueScoreboard {
 	public QueueScoreboard() {
 		sb = Bukkit.getScoreboardManager().getNewScoreboard();
 
-		Component title = text("LITESTRIKE").color(NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true);
+		Component title = text("LIGHTSTRIKE").color(NamedTextColor.GREEN).decoration(TextDecoration.BOLD, true);
 		Objective obj = sb.registerNewObjective("main", Criteria.DUMMY, title);
 
 		obj.setDisplaySlot(DisplaySlot.SIDEBAR);
@@ -49,7 +49,7 @@ public class QueueScoreboard {
 		obj.getScore("1").customName(text(""));
 
 		obj.getScore("0").setScore(0);
-		obj.getScore("0").customName(text("ᴄʀʏꜱᴛᴀʟɪᴢᴇᴅ.ᴄᴄ ").color(TextColor.color(0xc4b50a)));
+		obj.getScore("0").customName(text("ᴄᴏꜱɴᴇᴛ.ᴄᴄ ").color(TextColor.color(0xc4b50a)));
 
 		Team player_count = sb.registerNewTeam("player_count");
 		player_count.addEntry("5");
